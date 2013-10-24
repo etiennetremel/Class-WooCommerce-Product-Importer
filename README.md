@@ -14,6 +14,8 @@ Work for WooCommmerce 2.0
 * Add 2 variations: Blue and Red with different stock level and price
 
 
+
+```php
     require( 'class-woocommerce-product-importer.php' );
 
     $wc_importer = new WooCommerce_Product_Importer();
@@ -57,5 +59,4 @@ Work for WooCommmerce 2.0
     );
 
     $wc_importer->add_product( $args );
-
-
+```
