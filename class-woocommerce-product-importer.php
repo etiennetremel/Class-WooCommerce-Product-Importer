@@ -1,0 +1,661 @@
+<?php
+/**
+ * Class WooCommerce Product Importer
+ *
+ * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
+ *
+ * @class       WooCommerce_Product_Importer
+ * @version     1.0.0
+ * @author      Etienne Tremel
+ * Last Update: 24/10/2013
+ */
+if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
+    class WooCommerce_Product_Importer {
+
+        public $errors;
+
+        function __construct( $options = array() ) {
+            $this->errors = new WP_Error();
+            $this->options = wp_parse_args( $options, $this->options  );
+        }
+
+
+        /**
+         * Add product
+         *
+         * Add product to WooCommerce, if product exist (SKU already used), return product id
+         *
+         * Check $default_args for datas
+         * You can add custom field by adding new row into metas, ie:
+         * $args = array( ..., 'metas'   => array( ... 'my-custom-meta-key' => 'value', ... ) )
+         *
+         * @access public
+         * @param  array     Product details
+         * @return integer   Product ID
+         */
+        public function add_product( $args ) {
+            global $wpdb;
+
+            $current_user = wp_get_current_user();
+
+            $default_args = array(
+                'user_id'            => '',
+                'name'               => '',
+                'slug'               => '',
+                'status'             => 'publish',
+                'description'        => '',
+                'excerpt'            => '',
+                'tags'               => array(),
+                'images'             => array(),
+                'categories'         => array(),
+                'fetch_image_type'   => 'remote', // Remote url (ext), by IDs or Title (already in DB)
+                'type'               => 'simple',
+                'metas'              => array(
+                    '_sku'                      => '',
+                    '_regular_price'            => '',
+                    '_sale_price'               => '',
+                    '_sale_price_dates_from'    => '',
+                    '_sale_price_dates_to'      => '',
+                    '_manage_stock'             => 'yes',
+                    '_sold_individually'        => '',
+                    '_stock'                    => '',
+                    '_visibility'               => 'visible',
+                    '_tax_status'               => '',
+                    '_tax_class'                => '',
+                    '_featured'                 => 'no',
+                    '_backorders'               => 'no',
+                    '_virtual'                  => 'no',
+                    '_downloadable'             => 'no',
+                    '_height'                   => '',
+                    '_length'                   => '',
+                    '_weight'                   => '',
+                    '_width'                    => '',
+                    '_thumbnail_id'             => null,
+                    '_purchase_note'            => '',
+                    '_product_attributes'       => array()
+                )
+            );
+            $args = self::parse_args_r( $args, $default_args );
+
+            if ( empty( $args['user_id'] ) )
+                $args['user_id'] = $current_user->ID;
+
+            if ( empty( $args['metas']['_sku'] ) )
+                return $this->errors->add( 'product', 'SKU is missing' );
+
+            if ( empty( $args['slug'] ) )
+                $args['slug'] = $args['name'];
+
+
+            // Prepare post before insertion
+            $product = array(
+                'post_author'       => $args['user_id'],
+                'post_title'        => $args['name'],
+                'post_name'         => sanitize_title( $args['slug'] ),
+                'post_status'       => $args['status'],
+                'comment_status'    => 'closed',
+                'ping_status'       => 'closed',
+                'post_content'      => $args['description'],
+                'post_excerpt'      => $args['excerpt'],
+                'post_type'         => 'product'
+            );
+
+            //Check if the product is already in the DB
+            $product_id_in_db = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $args['metas']['_sku'] ) );
+
+            //If product exist get ID, or insert
+            $product_id = ( $product_id_in_db ) ? $product_id_in_db : wp_insert_post( $product, true );
+
+            if ( ! $product_id )
+                return $product_id;
+
+            // Set stock status
+            if ( is_numeric( $args['metas']['_stock'] ) && $args['metas']['_stock'] === 0 )
+                $args['metas']['_stock_status'] = 'outofstock';
+            else
+                $args['metas']['_stock_status'] = 'instock';
+
+            $args['metas']['_price'] = $args['metas']['_regular_price'];
+
+            // Set metas:
+            foreach ( $args['metas'] as $key => $value )
+                if ( $value != null || ( is_array( $value ) && count( $value ) > 0 ) )
+                    update_post_meta( $product_id, $key, $value );
+
+            // Set tags
+            wp_set_object_terms( $product_id, array_map( 'trim', $args['tags'] ), 'product_tag' );
+
+            // Set product as simple
+            wp_set_object_terms( $product_id, $args['type'], 'product_type' );
+
+            // Add images
+            self::add_image_to_product( $product_id, $args['images'], $args['fetch_image_type'] );
+
+            // Associate to category
+            self::add_product_to_category( $product_id, $args['categories'] );
+
+            return $product_id;
+        }
+
+
+        /**
+         * ADD IMAGE TO PRODUCT
+         *
+         * Add image to a specific product. Image can be present fetched from a remote server or already in the DB
+         *
+         * Fetch via remote server:
+         * add_image_to_product( 12, array( 'http://remote.com/image-1.jpg', 'http://remote.com/image-1.jpg' ) );
+         *
+         * Image already in DB, association via title:
+         * add_image_to_product( 12, array( 'image-1', 'image-2' ) );
+         *
+         * Image already in DB, association via ID:
+         * add_image_to_product( 12, array( 4, 5 ) );
+         *
+         * @access public
+         * @param  integer   $product_id    Product ID
+         *         array     $images        Image list to associate with defined product. First element in array is the featured image.
+         *         string    $fetch         Default: remote
+         *                                  - 'remote':  image downloaded from a remote server
+         *                                  - 'title':   image is already in DB, make association via Attachment Title
+         *                                  - 'id':      image is already in DB, make association via Attachment ID
+         * @return integer   Product ID
+         */
+        public function add_image_to_product( $product_id, $images = array(), $fetch = 'remote' ) {
+
+            // Clean array:
+            $images = array_values( array_filter( $images ) );
+
+            $image_ids = array();
+
+            foreach ( $images as $index => $image ) {
+                switch ( $fetch ) {
+                    case 'remote':
+                        try {
+                            if (file_exists($filename)) {
+                                // Get image from remote server
+                                if ( ( fopen( $image, 'r' ) == true ) ) {
+                                    $size = getimagesize( $image );
+                                    $remote_image = file_get_contents( $image );
+                                    $extension = image_type_to_extension( $size[2] );
+                                    $image_type = image_type_to_mime_type( $size[2] );
+
+                                    // Fix jpg extension
+                                    $extension = ( '.jpeg' == $extension ) ? '.jpg' : $extension;
+
+                                    // Can get the content?
+                                    if ( false !== $remote_image ) {
+                                        $wp_upload_dir = wp_upload_dir();
+
+                                        // Add image to DB
+                                        $name = preg_replace( '/\.[^.]+$/', '', basename( $image ) );
+
+                                        // if name not defined, make one:
+                                        if ( $name == '' )
+                                            $name = get_the_title( $product_id );
+
+                                        // Define
+                                        $filename = sanitize_title_with_dashes( $name ) . $extension;
+                                        $file_url = $wp_upload_dir['url'] . '/' . $filename;
+                                        $file_path = $wp_upload_dir['path'] . DIRECTORY_SEPARATOR . $filename;
+
+                                        $slug = sanitize_title( $filename );
+                                        $args = array(
+                                            'name'              => $slug,
+                                            'post_type'         => 'attachment',
+                                            'posts_per_page'    => 1,
+                                            'post_status'       => null
+                                        );
+                                        $attachment_in_db = get_posts( $args );
+
+                                        // Is attachment already in DB?
+                                        if ( $attachment_in_db ) {
+
+                                            // push attachment ID
+                                            $image_ids[] = $attachment_in_db[0]->ID;
+
+                                        } else {
+
+                                            // Generate file into Upload directory + create attachment post with meta-data
+                                            if ( file_put_contents( $file_path, $remote_image ) ) {
+                                                $wp_filetype = wp_check_filetype( $remote_image, null );
+                                                $attachment = array(
+                                                    'guid'              => $file_url,
+                                                    'post_mime_type'    => $image_type,
+                                                    'post_title'        => $slug,
+                                                    'post_content'      => '',
+                                                    'post_status'       => 'inherit'
+                                                );
+                                                $image_id = wp_insert_attachment( $attachment, $file_url, $product_id );
+
+                                                if ( ! function_exists( 'wp_generate_attachment_metadata' ) )
+                                                    require_once( ABSPATH . 'wp-admin/includes/image.php' );
+
+                                                $image_metas = wp_generate_attachment_metadata( $image_id, $file_url );
+                                                wp_update_attachment_metadata( $image_id, $image_metas );
+
+                                                $image_ids[] = $image_id;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                $this->errors->add( 'add_image_to_product', 'Image not found: ' . $image );
+                                continue;
+                            }
+                        } catch (Exception $e) {
+                            $this->errors->add( 'add_image_to_product', 'Error importing image: ' . $image );
+                            continue;
+                        }
+                        break;
+                    case 'title':
+                        $image_name = preg_replace( '/([^.]+)\.(jpg|gif|png|bmp|tga)/', '$1', $image );
+                        if ( ! is_null( $image_name ) ) {
+                            $db_image = get_page_by_title( $image_name, OBJECT, 'attachment' );
+                            if ( ! is_null( $db_image ) ) {
+                                // Set featured image
+                                if ( 0 == $index )
+                                    set_post_thumbnail( $product_id, $db_image->ID );
+
+                                $image_ids[] = $db_image->ID;
+                            } else {
+                                $this->add_error( 'add_image_to_product', 'Image missing in DB' );
+                                continue;
+                            }
+                        }
+                        break;
+
+                    case 'id':
+                        $image_ids[] = $image;
+                        break;
+                }
+            }
+
+            // Set featured image & product image gallery
+            if ( count( $image_ids ) > 0 ) {
+                set_post_thumbnail( $product_id, $image_ids[0] );
+
+                // Associate images as gallery
+                update_post_meta( $product_id, '_product_image_gallery', implode( ',', $image_ids ) );
+            }
+        }
+
+
+        /**
+         * ADD PRODUCT TO CATEGORY
+         *
+         * Create the category with parents if not defined
+         *
+         * Usage with single category:
+         * add_product_to_category( 12, 'My category name' );
+         *
+         * Usage with multiple categories:
+         * add_product_to_category( 12, array(
+         *     'My first category',
+         *     'My second category'
+         * ) );
+         *
+         * Usage with hierarchical categories:
+         * add_product_to_category( 12, array(
+         *     array(
+         *         'My category',
+         *         'My sub category',
+         *         'My sub sub category'
+         *     )
+         * ) );
+         *
+         * @access public
+         * @param  integer   $product_id    Product ID
+         *         array     $categories    Category
+         * @return void
+         */
+
+        public function add_product_to_category( $product_id, $categories ) {
+
+            $category_in = array();
+
+            // Temporarily disable terms count updates
+            wp_defer_term_counting( true );
+
+            // Check if single
+            if ( ! is_array( $categories ) )
+                $categories = array( $category );
+
+            // Multiple
+            foreach( $categories as $category ) {
+                if ( is_array( $category ) ) {
+                    // Hierarchical
+                    $parent = 0;
+                    foreach ( $category as $sub_category ) {
+
+                        if ( is_numeric( $sub_category ) )
+                            $category_id = $sub_category;
+                        else
+                            $category_id = self::add_category( array(
+                                'name'      => $sub_category,
+                                'parent'    => $parent
+                            ) );
+
+                        if ( ! is_wp_error( $category_id ) ) {
+                            $parent = $category_id;
+                            $category_in[] = $category_id;
+                        }
+                    }
+                } else {
+                    // Single category
+                    if ( is_numeric( $category ) )
+                        $category_id = $category;
+                    else
+                        $category_id = self::add_category( array(
+                            'name'  => $category
+                        ) );
+
+                    if ( ! is_wp_error( $category_id ) )
+                        $category_in[] = $category_id;
+                }
+            }
+
+            // Make sure the terms IDs is integers:
+            $category_in = array_map( 'intval', $category_in );
+            $category_in = array_unique( $category_in );
+
+            // Set categories id to Product
+            wp_set_object_terms( $product_id, $category_in, 'product_cat' );
+
+            // check out http://wordpress.stackexchange.com/questions/24498/wp-insert-term-parent-child-problem
+            delete_option( 'product_cat_children' );
+
+            // Re-enable terms count updates
+            wp_defer_term_counting( false );
+
+            // Update number of post associated to the category:
+            wp_update_term_count_now( $category_in, 'product_cat' );
+        }
+
+
+        /**
+         * ADD VARIATION TO PRODUCT
+         * Usage:
+         *   add_variation_to_product( 12, array(
+         *       'name'   => Color',
+         *       'values' => array(
+         *           'Blue'  => array(
+         *               '_sku'              => 'P678',
+         *               '_manage_stock'     => 'yes',
+         *               '_regular_price'    => '20.00',
+         *               '_sale_price'       => '12.00',
+         *               '_visibility'       => 'visible',
+         *               '_tax_status'       => 'taxable',
+         *               '_backorders'       => 'no',
+         *               '_virtual'          => 'no',
+         *               '_downloadable'     => 'no',
+         *               '_stock'            => '',
+         *               '_weight'           => '',
+         *               '_length'           => '',
+         *               '_width'            => '',
+         *               '_height'           => '',
+         *               '_thumbnail_id'     => ''
+         *           ),
+         *           'Red'   => array(
+         *               '_sku'              => 'P679',
+         *               '_manage_stock'     => 'yes',
+         *               '_regular_price'    => '20.00',
+         *               '_sale_price'       => '12.00',
+         *               '_visibility'       => 'visible',
+         *               '_tax_status'       => 'taxable',
+         *               '_backorders'       => 'no',
+         *               '_virtual'          => 'no',
+         *               '_downloadable'     => 'no',
+         *               '_stock'            => '',
+         *               '_weight'           => '',
+         *               '_length'           => '',
+         *               '_width'            => '',
+         *               '_height'           => '',
+         *               '_thumbnail_id'     => ''
+         *           )
+         *   ) );
+         *
+         * @access public
+         * @param  integer   $product_id    Product ID
+         *         array     $args          List of variations
+         * @return void
+         */
+        public function add_variation_to_product( $product_id, $args ) {
+
+            $default = array(
+                'name'      => '',
+                'values'    => array()
+            );
+
+            $args = wp_parse_args( $args, $default );
+
+            $taxonomy = 'pa_' . sanitize_title_with_dashes( $args['name'] );
+
+            // Clear existing values
+            wp_set_object_terms( $product_id, NULL, $taxonomy );
+
+            // Explode attributes and remove first and last white space
+            $attributes_ids = array();
+
+
+            // Fetch post to duplicate
+            $post_to_duplicate = get_post( $product_id );
+
+            $variation = array(
+                'post_author'       => $post_to_duplicate->post_author,
+                'post_title'        => $post_to_duplicate->post_title,
+                'post_name'         => $post_to_duplicate->post_name,
+                'post_status'       => $post_to_duplicate->post_status,
+                'comment_status'    => $post_to_duplicate->comment_status,
+                'ping_status'       => $post_to_duplicate->ping_status,
+                'post_content'      => $post_to_duplicate->post_content,
+                'post_excerpt'      => $post_to_duplicate->post_excerpt,
+                'post_type'         => 'product_variation',
+                'post_parent'       => $product_id
+            );
+
+            $default_metas = array(
+                '_sku'              => null,
+                '_regular_price'    => null,
+                '_sale_price'       => null,
+                '_manage_stock'     => null,
+                '_stock'            => null,
+                '_regular_price'    => null,
+                '_visibility'       => null,
+                '_tax_status'       => null,
+                '_backorders'       => null,
+                '_virtual'          => null,
+                '_downloadable'     => null,
+                '_thumbnail_id'     => null,
+                '_weight'           => null,
+                '_length'           => null,
+                '_width'            => null,
+                '_height'           => null,
+                '_thumbnail_id'     => null
+            );
+
+            foreach ( $args['values'] as $variation_name => $metas ) {
+
+                // Define new variation name:
+                $variation['post_name'] .= sanitize_title( $variation_name );
+
+                // If product exist get ID, or insert
+                $variation_id = wp_insert_post( $variation );
+
+
+                /* DUPLICATE PRODUCT META */
+                global $wpdb;
+
+                // Fetch product meta
+                $product_meta = $wpdb->get_results( "SELECT meta_key, meta_value FROM $wpdb->postmeta WHERE post_id = '$product_id'" );
+
+                // If metas exist
+                if ( sizeof( $product_meta ) > 0 ) {
+
+                    $metas = wp_parse_args( $metas, $default_metas );
+
+                    // Update metas
+                    foreach ( $product_meta as $col )
+                        if ( in_array( $col->meta_key, $metas ) && $metas->meta_value != null )
+                            update_post_meta( $variation_id, $col->meta_key, $col->meta_value );
+
+                    // Set new attribute to post
+                    update_post_meta( $variation_id, 'attribute_' . $taxonomy, sanitize_title( $variation_name ) );
+                }
+
+                $attribute = term_exists( $variation_name, $taxonomy );
+
+                // Check attribute taxonomie exist
+                if ( ! is_array( $attribute ) ) {
+                    $args = array(
+                        'slug'  => sanitize_title( $term )
+                    );
+                    $attribute = wp_insert_term( $term, $taxonomy, $args );
+                }
+
+                //Set attribute to duplicated product
+                wp_set_object_terms( $variation_id, (int)$attribute['term_id'], $taxonomy, true );
+
+
+                $attributes_ids[] = $attribute['term_id'];
+            }
+
+            // Make sure the terms IDs is integers:
+            $attributes_ids = array_map( 'intval', $attributes_ids );
+            $attributes_ids = array_unique( $attributes_ids );
+
+            // Make product as variable
+            wp_set_object_terms( $product_id, 'variable', 'product_type' );
+            wp_set_object_terms( $product_id, $attributes_ids, $taxonomy, true );
+
+            //Set attribute to product
+            $post_meta = get_post_meta( $product_id, '_product_attributes', false );
+            $post_meta[ $taxonomy ] = array(
+                'name'          => $taxonomy,
+                'position'      => 0,
+                'is_variation'  => 1,
+                'is_taxonomy'   => 1,
+                'is_visible'    => 1
+            );
+            update_post_meta( $product_id, '_product_attributes', $post_meta );
+        }
+
+
+        /**
+         * ADD CATEGORY
+         *
+         * Add a new category into WooCommerce, if the category already exist return Category ID
+         *
+         * @access public
+         * @param  array     $args    Category parameters
+         * @return integer            Category ID
+         */
+        public function add_category( $args ) {
+
+            $default = array(
+                'name'             => '',
+                'slug'             => '',
+                'parent'           => 0,
+                'meta_title'       => '',
+                'meta_keywords'    => '',
+                'meta_description' => '',
+                'description'      => ''
+            );
+
+            $args = wp_parse_args( $args, $default );
+
+            if ( empty( $args['name'] ) )
+                return false;
+
+            if ( empty( $args['slug'] ) )
+                $args['slug'] = sanitize_title( $args['name'] );
+
+            $category = term_exists( $args['name'], 'product_cat' );
+
+            if ( ! is_array( $category ) )
+                $category = wp_insert_term( $args['name'], 'product_cat', array(
+                    'parent'        => $args['parent'],
+                    'description'   => $args['description'],
+                    'slug'          => $args['slug']
+                ) );
+
+            if ( ! is_wp_error( $category ) )
+                return $category['term_id'];
+        }
+
+
+        /**
+         * ASSOCIATE UPSELLS VIA SKU
+         *
+         * Associate to a product a list of upsells via their SKU Code
+         *
+         * @access public
+         * @param  integer     $product_id    Product ID
+         *         array       $upsell_skus   List of upsells SKU Code
+         * @return void
+         */
+        public function associate_upsell_sku( $product_id, $upsell_skus = array() ) {
+            global $wpdb;
+            $upsell_ids = array();
+
+            foreach ( $upsell_skus as $upsell_sku ) {
+                $upsell_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $upsell_sku ) );
+
+                if ( $upsell_id )
+                    $upsell_ids[] = $upsell_id;
+            }
+
+            // Update DB
+            update_post_meta( $product_id, '_upsell_ids', $upsell_ids );
+        }
+
+
+        /**
+         * ASSOCIATE CROSSSELLS VIA SKU
+         *
+         * Associate to a product a list of crosssells via their SKU Code
+         *
+         * @access public
+         * @param  integer     $product_id    Product ID
+         *         array       $upsell_skus   List of crosssell SKU Code
+         * @return void
+         */
+        public function associate_crosssell_sku( $product_id, $crosssell_skus = array() ) {
+            global $wpdb;
+            $crosssell_ids = array();
+
+            foreach ( $crosssell_skus as $crosssell_sku ) {
+                $crosssell_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $crosssell_sku ) );
+
+                if ( $crosssell_id )
+                    $crosssell_ids[] = $crosssell_id;
+            }
+
+            // Update DB
+            update_post_meta( $product_id, '_crosssell_ids', $crosssell_ids );
+        }
+
+
+        /**
+         * Recursive version of wp_parse_args()
+         *
+         * @access private
+         */
+        private function parse_args_r( &$a, $b ) {
+            $a = (array) $a;
+            $b = (array) $b;
+            $r = $b;
+
+            foreach ( $a as $k => &$v ) {
+                if ( is_array( $v ) && isset( $r[ $k ] ) ) {
+                    $r[ $k ] = self::parse_args_r( $v, $r[ $k ] );
+                } else {
+                    $r[ $k ] = $v;
+                }
+            }
+
+            return $r;
+        }
+    }
+}
+?>
