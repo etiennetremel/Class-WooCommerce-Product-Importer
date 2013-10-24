@@ -6,13 +6,12 @@ Import products into WooCommerce: add images, variations, categories, upsells, c
 Work for WooCommmerce 2.0
 
 
-### Usage
+## Usage
 
-**Add a product**
+### Add a product
 
 * Fetch image from remote server, first image will be added as featured image, other added into product gallery
 * Add 2 variations: Blue and Red with different stock level and price
-
 
 
 ```php
