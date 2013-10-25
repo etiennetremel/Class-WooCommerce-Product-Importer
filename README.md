@@ -59,3 +59,43 @@ $args = array(
 
 $wc_importer->add_product( $args );
 ```
+
+
+### Add a category
+```php
+require( 'class-woocommerce-product-importer.php' );
+
+$wc_importer = new WooCommerce_Product_Importer();
+
+// Add main category
+$args = array(
+    'name'             => 'Bike',
+    'description'      => 'This is the description of the category'
+);
+$category_id = $wc_importer->add_category( $args );
+
+// Add a subcategory
+$args = array(
+    'name'             => 'Road Bike',
+    'parent'           => $category_id,
+    'description'      => 'This is the description of the sub-category'
+);
+$sub_category_id = $wc_importer->add_category( $args );
+```
+
+
+### Add image to product from remote server
+```php
+require( 'class-woocommerce-product-importer.php' );
+
+$wc_importer = new WooCommerce_Product_Importer();
+
+$images = array(
+    'http://remote.com/bike_front.jpg', // First image will be defined as featured image
+    'http://remote.com/bike_back.jpg',  // Other images are added as element in the product gallery
+    'http://remote.com/bike_zoomed.jpg'
+);
+$product_id = 87;
+
+$wc_importer->add_image_to_product( $product_id $args );
+```
