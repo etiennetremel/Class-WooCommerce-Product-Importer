@@ -177,7 +177,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             if ( $force_delete ) {
                 $post_meta = get_post_custom( $product_id );
 
-                if ( $post_meta ) {
+                if ( $post_meta )
                     foreach ( $post_meta as $key => $value )
                         delete_post_meta( $product_id, $key );
             }
