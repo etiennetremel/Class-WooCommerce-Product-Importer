@@ -5,9 +5,9 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.0.0
+ * @version     1.1.0
  * @author      Etienne Tremel
- * Last Update: 24/10/2013
+ * Last Update: 19/11/2013
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
@@ -21,7 +21,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
 
         /**
-         * Add product
+         * ADD PRODUCT
          *
          * Add product to WooCommerce, if product exist (SKU already used), return product id
          *
@@ -100,10 +100,10 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 'post_type'         => 'product'
             );
 
-            //Check if the product is already in the DB
+            // Check if the product is already in the DB
             $product_id_in_db = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $args['metas']['_sku'] ) );
 
-            //If product exist get ID, or insert
+            // If product exist get ID, or insert
             $product_id = ( $product_id_in_db ) ? $product_id_in_db : wp_insert_post( $product, true );
 
             if ( ! $product_id )
@@ -135,6 +135,56 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             self::add_product_to_category( $product_id, $args['categories'] );
 
             return $product_id;
+        }
+
+
+        /**
+         * DELETE PRODUCT
+         *
+         * Delete product and all its data
+         *
+         * Move product with ID = 25 to the trash
+         * delete_product( 'product_id=25' )
+         *
+         * Delete definitively a product with SKU = 00012ES
+         * delete_product( 'sku=00012ES', true )
+         *
+         * @access  public
+         * @param   array     $args            Check $default_args for datas
+         *          boolean   $force_delete    Whether to bypass trash and force deletion
+         * @return  boolean                    Return true if product has been deleted, false if not
+         */
+        public function delete_product( $args, $force_delete = false ) {
+            global $wpdb;
+
+            $default_args = array(
+                'sku'           => null,
+                'product_id'    => null
+            );
+
+            $args = wp_parse_args( $args, $default_args );
+            extract( $args, EXTR_SKIP );
+
+
+            // Check if product exist
+            if ( $sku )
+                $product_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $sku ) );
+
+            if ( ! $product_id || is_null( $product_id ) )
+                return false;
+
+            // Delete post meta
+            if ( $force_delete ) {
+                $post_meta = get_post_custom( $product_id );
+
+                if ( $post_meta ) {
+                    foreach ( $post_meta as $key => $value )
+                        delete_post_meta( $product_id, $key );
+            }
+
+            wp_delete_post( $product_id, $force_delete );
+
+            return true;
         }
 
 

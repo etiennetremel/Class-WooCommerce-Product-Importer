@@ -99,3 +99,7 @@ $product_id = 87;
 
 $wc_importer->add_image_to_product( $product_id $args );
 ```
+
+## Changelog
+* *v1.1.0*
+  New function delete_product() added
