@@ -5,18 +5,18 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.1.0
+ * @version     1.1.1
  * @author      Etienne Tremel
- * Last Update: 19/11/2013
+ * Last Update: 21/11/2013
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
 
         public $errors;
 
-        function __construct( $options = array() ) {
+
+        function __construct() {
             $this->errors = new WP_Error();
-            $this->options = wp_parse_args( $options, $this->options  );
         }
 
 
@@ -101,7 +101,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             );
 
             // Check if the product is already in the DB
-            $product_id_in_db = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $args['metas']['_sku'] ) );
+            $product_id_in_db = $this->product_exist( $args['metas']['_sku'] );
 
             // If product exist get ID, or insert
             $product_id = ( $product_id_in_db ) ? $product_id_in_db : wp_insert_post( $product, true );
@@ -168,7 +168,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
             // Check if product exist
             if ( $sku )
-                $product_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $sku ) );
+                $product_id = $this->product_exist( $sku );
 
             if ( ! $product_id || is_null( $product_id ) )
                 return false;
@@ -222,7 +222,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 switch ( $fetch ) {
                     case 'remote':
                         try {
-                            if (file_exists($filename)) {
+                            if ( file_exists( $image ) ) {
                                 // Get image from remote server
                                 if ( ( fopen( $image, 'r' ) == true ) ) {
                                     $size = getimagesize( $image );
@@ -405,6 +405,9 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 }
             }
 
+            if ( ! count( $category_in ) )
+                return;
+
             // Make sure the terms IDs is integers:
             $category_in = array_map( 'intval', $category_in );
             $category_in = array_unique( $category_in );
@@ -425,6 +428,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
         /**
          * ADD VARIATION TO PRODUCT
+         *
          * Usage:
          *   add_variation_to_product( 12, array(
          *       'name'   => Color',
@@ -537,7 +541,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 global $wpdb;
 
                 // Fetch product meta
-                $product_meta = $wpdb->get_results( "SELECT meta_key, meta_value FROM $wpdb->postmeta WHERE post_id = '$product_id'" );
+                $product_meta = $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value FROM $wpdb->postmeta WHERE post_id = %d", $product_id ) );
 
                 // If metas exist
                 if ( sizeof( $product_meta ) > 0 ) {
@@ -649,7 +653,8 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             $upsell_ids = array();
 
             foreach ( $upsell_skus as $upsell_sku ) {
-                $upsell_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $upsell_sku ) );
+
+                $upsell_id = $this->product_exist( $upsell_sku );
 
                 if ( $upsell_id )
                     $upsell_ids[] = $upsell_id;
@@ -675,7 +680,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             $crosssell_ids = array();
 
             foreach ( $crosssell_skus as $crosssell_sku ) {
-                $crosssell_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value='%s' LIMIT 1", $crosssell_sku ) );
+                $crosssell_id = $this->product_exist( $crosssell_sku );
 
                 if ( $crosssell_id )
                     $crosssell_ids[] = $crosssell_id;
@@ -683,6 +688,23 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
             // Update DB
             update_post_meta( $product_id, '_crosssell_ids', $crosssell_ids );
+        }
+
+
+        /**
+         * PRODUCT EXIST
+         *
+         * Check in the DB if a product has already a given SKU code
+         *
+         * @access public
+         * @param  string   $sku            SKU code
+         * @return mixed    $product_id     Return product ID if exist, false if not
+         */
+        public function product_exist( $sku ) {
+            global $wpdb;
+            $product_id = $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_sku' AND meta_value= %s LIMIT 1", $sku ) );
+
+            return $product_id;
         }
 
 
