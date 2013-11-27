@@ -101,5 +101,8 @@ $wc_importer->add_image_to_product( $product_id $args );
 ```
 
 ## Changelog
+* *v1.2.0*
+  Function add_image_to_product() is now using wp_remote_get() instead of file_get_contents()
+
 * *v1.1.0*
   New function delete_product() added
