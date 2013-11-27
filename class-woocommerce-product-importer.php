@@ -5,9 +5,9 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.1.1
+ * @version     1.2.0
  * @author      Etienne Tremel
- * Last Update: 21/11/2013
+ * Last Update: 27/11/2013
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
@@ -218,86 +218,88 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
             $image_ids = array();
 
+            $previous_image_name = '';
+
             foreach ( $images as $index => $image ) {
                 switch ( $fetch ) {
                     case 'remote':
-                        try {
-                            if ( file_exists( $image ) ) {
-                                // Get image from remote server
-                                if ( ( fopen( $image, 'r' ) == true ) ) {
-                                    $size = getimagesize( $image );
-                                    $remote_image = file_get_contents( $image );
-                                    $extension = image_type_to_extension( $size[2] );
-                                    $image_type = image_type_to_mime_type( $size[2] );
+                        // Define image name
+                        $name = apply_filters( 'woocommerce-product-importer-image-name', preg_replace( '/\.[^.]+$/', '', basename( $image ) ), $image, $product_id, $images, $previous_image_name );
 
-                                    // Fix jpg extension
-                                    $extension = ( '.jpeg' == $extension ) ? '.jpg' : $extension;
+                        // If name not defined, make one:
+                        if ( $name == '' )
+                            $name = get_the_title( $product_id );
 
-                                    // Can get the content?
-                                    if ( false !== $remote_image ) {
-                                        $wp_upload_dir = wp_upload_dir();
+                        // Append index to the end of the name if multiple images with same name
+                        if ( $name == $previous_image_name )
+                            $name .= '_' . $index;
 
-                                        // Add image to DB
-                                        $name = preg_replace( '/\.[^.]+$/', '', basename( $image ) );
+                        $previous_image_name = $name;
 
-                                        // if name not defined, make one:
-                                        if ( $name == '' )
-                                            $name = get_the_title( $product_id );
+                        $slug = sanitize_title( $name );
 
-                                        // Define
-                                        $filename = sanitize_title_with_dashes( $name ) . $extension;
-                                        $file_url = $wp_upload_dir['url'] . '/' . $filename;
-                                        $file_path = $wp_upload_dir['path'] . DIRECTORY_SEPARATOR . $filename;
+                        $args = array(
+                            'name'         => $slug,
+                            'post_type'    => 'attachment',
+                            'post_status'  => 'inherit'
+                        );
+                        $attachment_in_db = get_posts( $args );
 
-                                        $slug = sanitize_title( $filename );
-                                        $args = array(
-                                            'name'              => $slug,
-                                            'post_type'         => 'attachment',
-                                            'posts_per_page'    => 1,
-                                            'post_status'       => null
-                                        );
-                                        $attachment_in_db = get_posts( $args );
+                        // Is attachment already in DB?
+                        if ( $attachment_in_db ) {
 
-                                        // Is attachment already in DB?
-                                        if ( $attachment_in_db ) {
+                            // push attachment ID
+                            $image_ids[] = $attachment_in_db[0]->ID;
 
-                                            // push attachment ID
-                                            $image_ids[] = $attachment_in_db[0]->ID;
+                        } else {
 
-                                        } else {
+                            $get = wp_remote_get( $image, array( 'timeout'  => 60 ) );
+                            $type = wp_remote_retrieve_header( $get, 'content-type' );
 
-                                            // Generate file into Upload directory + create attachment post with meta-data
-                                            if ( file_put_contents( $file_path, $remote_image ) ) {
-                                                $wp_filetype = wp_check_filetype( $remote_image, null );
-                                                $attachment = array(
-                                                    'guid'              => $file_url,
-                                                    'post_mime_type'    => $image_type,
-                                                    'post_title'        => $slug,
-                                                    'post_content'      => '',
-                                                    'post_status'       => 'inherit'
-                                                );
-                                                $image_id = wp_insert_attachment( $attachment, $file_url, $product_id );
-
-                                                if ( ! function_exists( 'wp_generate_attachment_metadata' ) )
-                                                    require_once( ABSPATH . 'wp-admin/includes/image.php' );
-
-                                                $image_metas = wp_generate_attachment_metadata( $image_id, $file_url );
-                                                wp_update_attachment_metadata( $image_id, $image_metas );
-
-                                                $image_ids[] = $image_id;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                $this->errors->add( 'add_image_to_product', 'Image not found: ' . $image );
+                            if ( ! $type ) {
+                                $this->errors->add( 'add_image_to_product', 'Mime type not found: ' . $image );
                                 continue;
                             }
-                        } catch (Exception $e) {
-                            $this->errors->add( 'add_image_to_product', 'Error importing image: ' . $image );
-                            continue;
+
+                            $mime_types = array(
+                                'image/jpg'     => 'jpg',
+                                'image/jpeg'    => 'jpg',
+                                'image/gif'     => 'gif',
+                                'image/png'     => 'png'
+                            );
+
+                            if ( isset( $mime_types[ $type ] ) ) {
+                                $extension = $mime_types[ $type ];
+                            } else {
+                                $this->errors->add( 'add_image_to_product', 'Mime type ' . $type . ' invalid: ' . $image );
+                                continue;
+                            }
+
+                            $uploaded = wp_upload_bits( $slug . '.' . $extension, null, wp_remote_retrieve_body( $get ) );
+
+                            if ( $uploaded['error'] ) {
+                                $this->errors->add( 'add_image_to_product', $uploaded['error'] . ' Image:' . $image );
+                                continue;
+                            }
+
+                            $attachment = array(
+                                'guid'              => $uploaded['url'],
+                                'post_title'        => $slug,
+                                'post_mime_type'    => $type
+                            );
+                            $attach_id = wp_insert_attachment( $attachment, $uploaded['file'], $product_id );
+
+                            if ( ! function_exists( 'wp_generate_attachment_metadata' ) )
+                                require_once( ABSPATH . 'wp-admin/includes/image.php' );
+
+                            $attach_data = wp_generate_attachment_metadata( $attach_id, $uploaded['file'] );
+                            wp_update_attachment_metadata( $attach_id, $attach_data );
+
+                            $image_ids[] = $attach_id;
+
                         }
                         break;
+
                     case 'title':
                         $image_name = preg_replace( '/([^.]+)\.(jpg|gif|png|bmp|tga)/', '$1', $image );
                         if ( ! is_null( $image_name ) ) {
