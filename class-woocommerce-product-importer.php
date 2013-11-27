@@ -5,9 +5,9 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.2.0
+ * @version     1.2.1
  * @author      Etienne Tremel
- * Last Update: 27/11/2013
+ * Last Update: 28/11/2013
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
@@ -33,7 +33,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
          * @param  array     Product details
          * @return integer   Product ID
          */
-        public function add_product( $args ) {
+        public function add_product( $args, $update_if_sku_exist = false ) {
             global $wpdb;
 
             $current_user = wp_get_current_user();
@@ -86,6 +86,8 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
             if ( empty( $args['slug'] ) )
                 $args['slug'] = $args['name'];
 
+            // Check if the product is already in the DB
+            $product_id_in_db = $this->product_exist( $args['metas']['_sku'] );
 
             // Prepare post before insertion
             $product = array(
@@ -100,11 +102,13 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 'post_type'         => 'product'
             );
 
-            // Check if the product is already in the DB
-            $product_id_in_db = $this->product_exist( $args['metas']['_sku'] );
-
-            // If product exist get ID, or insert
-            $product_id = ( $product_id_in_db ) ? $product_id_in_db : wp_insert_post( $product, true );
+            // If product exist in DB, update
+            if ( $update_if_sku_exist && $product_id_in_db ) {
+                $product['ID'] = $product_id_in_db;
+                $product_id = wp_update_post( $product );
+            } else {
+                $product_id = wp_insert_post( $product, true );
+            }
 
             if ( ! $product_id )
                 return $product_id;
@@ -238,18 +242,15 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
                         $slug = sanitize_title( $name );
 
-                        $args = array(
-                            'name'         => $slug,
-                            'post_type'    => 'attachment',
-                            'post_status'  => 'inherit'
-                        );
-                        $attachment_in_db = get_posts( $args );
+                        // Check if image is in DB
+                        $attachment_in_db = get_page_by_title( $slug, 'OBJECT', 'attachment' );
+                        $attachment_in_db = apply_filters( 'woocommerce-product-importer-image-in-db', $attachment_in_db, $name );
 
                         // Is attachment already in DB?
                         if ( $attachment_in_db ) {
 
                             // push attachment ID
-                            $image_ids[] = $attachment_in_db[0]->ID;
+                            $image_ids[] = $attachment_in_db->ID;
 
                         } else {
 
