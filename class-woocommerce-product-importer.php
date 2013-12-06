@@ -5,9 +5,9 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.2.1
+ * @version     1.2.2
  * @author      Etienne Tremel
- * Last Update: 28/11/2013
+ * Last Update: 06/12/2013
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
@@ -312,7 +312,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
 
                                 $image_ids[] = $db_image->ID;
                             } else {
-                                $this->add_error( 'add_image_to_product', 'Image missing in DB' );
+                                $this->errors->add( 'add_image_to_product', 'Image missing in DB' );
                                 continue;
                             }
                         }
