@@ -565,7 +565,7 @@ if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
                 // Check attribute taxonomie exist
                 if ( ! is_array( $attribute ) ) {
                     $args = array(
-                        'slug'  => sanitize_title( $term )
+                        'slug'  => sanitize_title( $variation_name )
                     );
                     $attribute = wp_insert_term( $term, $taxonomy, $args );
                 }
