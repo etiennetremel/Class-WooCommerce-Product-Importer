@@ -5,9 +5,9 @@
  * Import products into WooCommerce: add images, variations, categories, upsells, crosssells
  *
  * @class       WooCommerce_Product_Importer
- * @version     1.2.2
+ * @version     1.2.3
  * @author      Etienne Tremel
- * Last Update: 06/12/2013
+ * Last Update: 23/01/2014
  */
 if ( ! class_exists( 'WooCommerce_Product_Importer' ) ) {
     class WooCommerce_Product_Importer {
